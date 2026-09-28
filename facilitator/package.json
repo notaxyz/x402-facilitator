@@ -12,6 +12,7 @@
     "start": "node dist/server.js",
     "dev": "tsx src/server.ts",
     "check": "tsc --noEmit",
+    "test": "vitest run",
     "clean": "rm -rf dist",
     "generate-api-key": "tsx scripts/generate-api-key.ts",
     "merchants": "tsx scripts/manage-merchants.ts"
@@ -34,7 +35,8 @@
     "@types/node": "^20.16.5",
     "@types/pg": "^8.15.6",
     "tsx": "^4.19.1",
-    "typescript": "^5.5.4"
+    "typescript": "^5.5.4",
+    "vitest": "^3.2.4"
   },
   "engines": {
     "node": ">=20.0.0",

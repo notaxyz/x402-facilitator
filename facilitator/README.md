@@ -83,10 +83,12 @@ Query parameters, all optional: `type` (`http` | `mcp`), `payTo`, `scheme`, `net
 }
 ```
 
-A resource is indexed only when `/settle` confirms the payer's transfer onchain; declarations attached to payments that never land are never listed. Entries are keyed on `(resource, toolName)` so MCP endpoints get one entry per tool.
+A resource is indexed only when `/settle` confirms the payer's transfer onchain; declarations attached to payments that never land are never listed. Entries are keyed on `(resource, toolName)` so MCP endpoints get one entry per tool. The first merchant to index a key owns it: settlements by other merchants for the same key are reported as `rejected` (`resource claimed by another merchant`) and change nothing. `accepts` is the union of requirements seen across that row's confirmed settlements.
+
+The catalog records that a declaration accompanied a confirmed payment. It does not verify that the declaring party controls the URL; see `../docs/BAZAAR_DISCOVERY.md`.
 
 #### `EXTENSION-RESPONSES` header
-When a request carries a `bazaar` declaration, `/verify` and `/settle` add the facilitator-to-server sidechannel header defined in spec section 7.2.1: base64 JSON keyed by extension name. For `bazaar` it holds `status` (`success` once indexed, `processing` while the payment is unconfirmed, `rejected` when the declaration was dropped) and `rejectedReason` on rejection. A rejected declaration never fails the payment. The header is absent when no declaration was sent.
+When a request carries a `bazaar` declaration, `/verify` and `/settle` add the facilitator-to-server sidechannel header defined in spec section 7.2.1: base64 JSON keyed by extension name. For `bazaar` it holds `status` (`success` once indexed, `processing` while the payment is unconfirmed or indexing is deferred, `rejected` when the declaration was dropped or the key belongs to another merchant) and `rejectedReason` on rejection. A rejected declaration never fails the payment. The header is absent when no declaration was sent, and when a valid declaration rode on a payment that failed for unrelated reasons (nothing to say about the declaration).
 
 ### `POST /verify`
 Verifies a payment without settling it. Read-only.

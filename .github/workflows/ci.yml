@@ -1,0 +1,25 @@
+name: facilitator
+
+on:
+  push:
+    branches: [main, dev]
+    paths: ['facilitator/**', '.github/workflows/ci.yml']
+  pull_request:
+    paths: ['facilitator/**', '.github/workflows/ci.yml']
+
+jobs:
+  check-and-test:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: facilitator
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: corepack enable
+      # pnpm-lock.yaml is gitignored in this repository, so the lockfile cannot be frozen
+      - run: corepack pnpm install --no-frozen-lockfile
+      - run: corepack pnpm check
+      - run: corepack pnpm test
