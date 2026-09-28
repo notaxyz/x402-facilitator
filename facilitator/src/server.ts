@@ -1,4 +1,4 @@
-import express, { Request, Response, NextFunction } from 'express';
+import express, { Request, Response, NextFunction, type Express } from 'express';
 import rateLimit from 'express-rate-limit';
 import { Address } from 'viem';
 import { encodePaymentRequiredHeader } from '@x402/core/http';
@@ -18,6 +18,7 @@ import { authenticateMerchant, authenticateAdmin, AuthenticatedRequest } from '.
 import { executeRefund } from './refund.js';
 import {
   BAZAAR_KEY,
+  REJECTED_CLAIMED_BY_OTHER,
   evaluateBazaarDeclaration,
   indexBazaarResource,
   setBazaarExtensionResponse,
@@ -27,7 +28,7 @@ import { listDiscoveryResources, type DiscoveryResourceType } from './discoveryS
 import * as Errors from './errors.js';
 import type { SupportedKind, SupportedResponse, RequirementsRequest, PaymentRequired } from './types.js';
 
-const app = express();
+const app: Express = express();
 
 app.use(express.json({ limit: BODY_SIZE_LIMIT }));
 app.use(express.static('public'));
@@ -295,8 +296,10 @@ app.post('/settle', settleLimiter, authenticateMerchant, async (req: Request, re
           return;
         }
         try {
-          await indexBazaarResource(bazaar.resource, parsed.payment, merchantAddress, nonceLogger);
-          bazaarResponse = { status: 'success' };
+          const outcome = await indexBazaarResource(bazaar.resource, parsed.payment, merchantAddress, nonceLogger);
+          bazaarResponse = outcome === 'claimed_by_other'
+            ? { status: 'rejected', rejectedReason: REJECTED_CLAIMED_BY_OTHER }
+            : { status: 'success' };
         } catch (error: any) {
           nonceLogger.error('Bazaar indexing failed', { error: error.message });
           bazaarResponse = { status: 'processing' };
@@ -304,10 +307,11 @@ app.post('/settle', settleLimiter, authenticateMerchant, async (req: Request, re
       },
     });
 
-    if (bazaar.declared && bazaar.valid && !bazaarResponse) {
-      bazaarResponse = result.errorReason === Errors.ErrSettlementPending
-        ? { status: 'processing' }
-        : { status: 'rejected', rejectedReason: 'payment did not settle' };
+    // Valid declaration but the hook never ran: the payment did not confirm. A pending
+    // broadcast may still land (retry reconciles it), so say processing. A terminal
+    // payment failure says nothing about the declaration, so send no bazaar status.
+    if (bazaar.declared && bazaar.valid && !bazaarResponse && result.errorReason === Errors.ErrSettlementPending) {
+      bazaarResponse = { status: 'processing' };
     }
     setBazaarExtensionResponse(res, bazaarResponse);
     res.json(result);
@@ -514,4 +518,8 @@ async function startServer() {
   }
 }
 
-startServer();
+if (process.env.NODE_ENV !== 'test') {
+  startServer();
+}
+
+export { app };

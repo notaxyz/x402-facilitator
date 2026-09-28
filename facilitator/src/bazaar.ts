@@ -9,7 +9,7 @@ import {
 import type { Address } from 'viem';
 import type { Response } from 'express';
 import type { NormalizedPayment } from './types.js';
-import { upsertDiscoveryResource, type DiscoveryMetadata } from './discoveryStore.js';
+import { upsertDiscoveryResource, type DiscoveryMetadata, type UpsertOutcome } from './discoveryStore.js';
 import type { Logger } from './logging.js';
 
 /**
@@ -134,16 +134,20 @@ export function evaluateBazaarDeclaration(payment: NormalizedPayment, logger: Lo
   return { declared: true, valid: true, resource };
 }
 
+export const REJECTED_CLAIMED_BY_OTHER = 'resource claimed by another merchant';
+
 /**
  * Write an accepted declaration to the catalog. Only call this once the payer's
  * transfer has confirmed, so unpaid declarations never become discoverable.
+ * Returns `claimed_by_other` when the (resource, toolName) key already belongs to a
+ * different merchant; the caller reports that as a rejection.
  */
 export async function indexBazaarResource(
   resource: DiscoveredResource,
   payment: NormalizedPayment,
   merchantAddress: Address,
   logger: Logger
-): Promise<void> {
+): Promise<UpsertOutcome> {
   const type = resource.discoveryInfo.input.type;
   const metadata: DiscoveryMetadata = {
     ...(resource.description !== undefined && { description: resource.description }),
@@ -161,16 +165,18 @@ export async function indexBazaarResource(
     type,
     toolName: 'toolName' in resource ? resource.toolName : undefined,
     x402Version: resource.x402Version,
-    accepts: [payment.raw.paymentRequirements],
+    requirement: payment.raw.paymentRequirements,
     metadata,
     merchantAddress,
-    payTo: payment.requirements.payTo,
-    scheme: payment.requirements.scheme,
-    network: payment.requirements.network,
     nonce: payment.authorization.nonce,
   });
 
-  logger.info('Bazaar resource catalogued', { resource: resource.resourceUrl, type, outcome });
+  if (outcome === 'claimed_by_other') {
+    logger.warn('Bazaar resource not catalogued', { resource: resource.resourceUrl, type, reason: REJECTED_CLAIMED_BY_OTHER });
+  } else {
+    logger.info('Bazaar resource catalogued', { resource: resource.resourceUrl, type, outcome });
+  }
+  return outcome;
 }
 
 /** Base64 JSON keyed by extension name, per spec section 7.2.1 */

@@ -128,7 +128,28 @@ sequenceDiagram
 5. The seller does the work and answers the buyer.
 6. `/settle` submits `transferWithAuthorization`, waits for the receipt and the expected `Transfer` event, and only
    then upserts `discovery_resources`. The header reports `success`. A declaration attached to a payment that never
-   lands is never indexed, so every catalog entry corresponds to a real settlement.
+   lands is never indexed.
+
+## What the catalog does and does not attest
+
+A catalog row records that **a declaration accompanied a payment that confirmed onchain to the facilitator, settled
+under the API key of the merchant stored in `merchant_address`.** That is all it records.
+
+It does **not** attest that the declaring party controls the resource URL. The declaration and `resource.url` arrive
+in the buyer's `PaymentPayload`, which the buyer signs and can edit. A buyer can settle a genuine payment to a genuine
+merchant while declaring any URL and any metadata; the facilitator has no way to prove domain ownership and does not
+try to. Consumers should treat entries as leads that cost someone real USDC to place, not as verified listings.
+
+Two rules limit the damage:
+
+- **First writer owns the key.** The merchant whose payment first indexed a `(resource, toolName)` pair owns the row.
+  Later settlements by any other merchant for the same key are ignored and reported back as
+  `rejected` / `resource claimed by another merchant`, so one cheap payment cannot rewrite another merchant's price,
+  `payTo` or metadata.
+- **`accepts` is a union.** Each settlement carries the single requirement the buyer chose, so a row accumulates the
+  distinct requirements seen across confirmed settlements (deduplicated by jsonb containment). A seller accepting
+  several networks appears with all of them once each has been paid at least once. Filtering by `network`, `scheme`
+  or `payTo` matches any entry in the set.
 
 ## Files
 
