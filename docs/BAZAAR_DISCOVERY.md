@@ -146,10 +146,11 @@ Two rules limit the damage:
   Later settlements by any other merchant for the same key are ignored and reported back as
   `rejected` / `resource claimed by another merchant`, so one cheap payment cannot rewrite another merchant's price,
   `payTo` or metadata.
-- **`accepts` is a union.** Each settlement carries the single requirement the buyer chose, so a row accumulates the
-  distinct requirements seen across confirmed settlements (deduplicated by jsonb containment). A seller accepting
-  several networks appears with all of them once each has been paid at least once. Filtering by `network`, `scheme`
-  or `payTo` matches any entry in the set.
+- **`accepts` is replaced, not accumulated.** Each settlement carries the single requirement the buyer chose, and the
+  newest one wins, so the row always advertises the terms the resource most recently settled on. Accumulating would
+  leave superseded prices discoverable, and an agent reading a stale entry would sign an authorization the resource
+  server's own 402 no longer accepts. A row therefore shows one requirement rather than every network a seller
+  supports; filtering by `network`, `scheme` or `payTo` matches against it.
 
 ## Files
 

@@ -83,7 +83,7 @@ Query parameters, all optional: `type` (`http` | `mcp`), `payTo`, `scheme`, `net
 }
 ```
 
-A resource is indexed only when `/settle` confirms the payer's transfer onchain; declarations attached to payments that never land are never listed. Entries are keyed on `(resource, toolName)` so MCP endpoints get one entry per tool. The first merchant to index a key owns it: settlements by other merchants for the same key are reported as `rejected` (`resource claimed by another merchant`) and change nothing. `accepts` is the union of requirements seen across that row's confirmed settlements.
+A resource is indexed only when `/settle` confirms the payer's transfer onchain; declarations attached to payments that never land are never listed. Entries are keyed on `(resource, toolName)` so MCP endpoints get one entry per tool. The first merchant to index a key owns it: settlements by other merchants for the same key are reported as `rejected` (`resource claimed by another merchant`) and change nothing. `accepts` holds the requirement from the most recent confirmed settlement, replaced rather than accumulated, so the catalog never advertises superseded terms.
 
 The catalog records that a declaration accompanied a confirmed payment. It does not verify that the declaring party controls the URL; see `../docs/BAZAAR_DISCOVERY.md`.
 
