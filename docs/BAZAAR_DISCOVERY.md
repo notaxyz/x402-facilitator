@@ -165,6 +165,11 @@ credentials. The resource URL is the field agents actually call, so it gets at l
 the icon gets. `DISCOVERY_ALLOW_PRIVATE_RESOURCE_URLS=true` relaxes the host rules (not
 the scheme rules) for local development against a seller on localhost.
 
+The screen runs twice: on `resource.url` before any schema work, and again on the URL that
+is actually stored. The SDK derives that one as origin + the declaration's `routeTemplate`
+and puts no length bound on the template, so a short `resource.url` alone says nothing
+about the size of the catalogued value.
+
 Two smaller bounds: a declaration over `DISCOVERY_MAX_DECLARATION_BYTES` (16KB) is refused
 before any schema work, and `description` and `mimeType` are truncated before they are
 stored, since the SDK sanitizes `serviceName`, `tags` and `iconUrl` but passes those two
@@ -192,6 +197,26 @@ Two rules limit the damage:
   leave superseded prices discoverable, and an agent reading a stale entry would sign an authorization the resource
   server's own 402 no longer accepts. A row therefore shows one requirement rather than every network a seller
   supports; filtering by `network`, `scheme` or `payTo` matches against it.
+
+## Known limitations
+
+Two gaps are known and deliberately not yet closed. Both should be fixed before a third-party seller onboards.
+
+**A deferred declaration is lost permanently.** When the schema validator is saturated or a validation times out,
+the declaration is reported `processing` and the settle carries on: the payment confirms and the nonce is consumed.
+Nothing persists the pending declaration, so it is never indexed and there is no retry path. `processing` here does
+not mean "will arrive later"; the seller has to settle another payment carrying the declaration for it to be
+catalogued. Closing this means storing the declaration beside the payment row and teaching the recovery worker
+(`src/recovery.ts`) to index it, which is a schema change plus a worker change. A small, honest declaration on an idle
+facilitator does not hit this path; a third-party declaration under load can.
+
+**The schema validator queue is shared across trust boundaries.** One worker and one 32-deep queue
+(`MAX_QUEUE_DEPTH` in `src/schemaGuard.ts`) serve both unauthenticated `/verify` and authenticated `/settle`.
+`/verify` does not consume the nonce, so a single validly signed payload carrying a declaration with a backtracking
+`pattern` can be replayed against `/verify` to keep the queue full. Each replay costs the facilitator up to
+`DISCOVERY_SCHEMA_TIMEOUT_MS` of worker time, and real settlements arriving meanwhile get `unavailable`, are
+reported `processing`, and are then lost as described above. The rate limiter is the only thing bounding this today.
+The remedy (separate queues per trust level, or a per-caller budget) is an open design decision.
 
 ## Files
 

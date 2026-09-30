@@ -193,8 +193,9 @@ app.get('/supported', (req: Request, res: Response) => {
 
   const response: SupportedResponse = {
     kinds,
-    // Discovery: declarations echoed in paymentPayload.extensions.bazaar are indexed on confirmed settle
-    extensions: [BAZAAR_KEY],
+    // Discovery: declarations echoed in paymentPayload.extensions.bazaar are indexed on confirmed settle.
+    // Without a database there is no index, so do not advertise what settle would reject.
+    extensions: isDatabaseConfigured() ? [BAZAAR_KEY] : [],
     // Also the required payTo address under the fee split model
     signers: { 'eip155:*': [facilitatorAddress] },
   };

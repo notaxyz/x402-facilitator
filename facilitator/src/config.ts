@@ -134,8 +134,24 @@ export const DISCOVERY_MAX_DECLARATION_BYTES = parseInt(process.env.DISCOVERY_MA
 // refused. Set this for local development against a seller on localhost.
 export const DISCOVERY_ALLOW_PRIVATE_RESOURCE_URLS = process.env.DISCOVERY_ALLOW_PRIVATE_RESOURCE_URLS === 'true';
 
-if (DISCOVERY_SCHEMA_TIMEOUT_MS < 1) {
-  throw new Error(`DISCOVERY_SCHEMA_TIMEOUT_MS must be at least 1ms, got ${DISCOVERY_SCHEMA_TIMEOUT_MS}`);
+// Smallest byte bound that still admits a real declaration; anything lower is a typo
+const MIN_DISCOVERY_MAX_DECLARATION_BYTES = 1024;
+
+// Number.isFinite, not a bare comparison: a non-numeric value parses to NaN, and every
+// comparison against NaN is false, so it would pass a `< 1` guard and then disable the check
+if (!Number.isFinite(DISCOVERY_SCHEMA_TIMEOUT_MS) || DISCOVERY_SCHEMA_TIMEOUT_MS < 1) {
+  throw new Error(
+    `DISCOVERY_SCHEMA_TIMEOUT_MS must be an integer of at least 1ms, got ${process.env.DISCOVERY_SCHEMA_TIMEOUT_MS}`
+  );
+}
+
+if (
+  !Number.isFinite(DISCOVERY_MAX_DECLARATION_BYTES) ||
+  DISCOVERY_MAX_DECLARATION_BYTES < MIN_DISCOVERY_MAX_DECLARATION_BYTES
+) {
+  throw new Error(
+    `DISCOVERY_MAX_DECLARATION_BYTES must be an integer of at least ${MIN_DISCOVERY_MAX_DECLARATION_BYTES}, got ${process.env.DISCOVERY_MAX_DECLARATION_BYTES}`
+  );
 }
 
 

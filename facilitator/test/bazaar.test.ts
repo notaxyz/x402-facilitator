@@ -75,6 +75,21 @@ describe('evaluateBazaarDeclaration', () => {
     expect((result as any).rejectedReason).toMatch(/IP literal/);
   });
 
+  it('catalogues origin + routeTemplate when the declaration carries a route template', async () => {
+    const declaration = { ...validBazaarDeclaration(), routeTemplate: '/users/:id' };
+    const result = await evaluateBazaarDeclaration(normalizedPayment(declaration), logger);
+    if (!result.declared || !result.valid) throw new Error('expected valid');
+    expect(result.resource.resourceUrl).toBe('https://api.example.com/users/:id');
+  });
+
+  it('rejects a route template that makes the catalogued url over-long, though resource.url is short', async () => {
+    // Under the declaration byte bound, so only the derived-URL screen can catch it
+    const declaration = { ...validBazaarDeclaration(), routeTemplate: `/${'a'.repeat(3000)}` };
+    const result = await evaluateBazaarDeclaration(normalizedPayment(declaration), logger);
+    expect(result).toMatchObject({ declared: true, valid: false });
+    expect((result as any).rejectedReason).toMatch(/routeTemplate.*at most \d+ characters/);
+  });
+
   it('rejects an oversized declaration before any schema work', async () => {
     const declaration = validBazaarDeclaration();
     (declaration.info as any).padding = 'x'.repeat(20_000);
