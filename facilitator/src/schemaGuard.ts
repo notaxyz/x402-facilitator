@@ -134,6 +134,8 @@ function spawnWorker(): Worker {
   });
 
   created.on('error', (error) => {
+    // An error from a worker we already replaced must not fail the job on its successor
+    if (worker !== created) return;
     logger.error('Schema validation worker errored', { error: error.message });
     abandonInFlight({ valid: false, unavailable: true, errors: ['schema validator unavailable'] });
     void pump();

@@ -157,6 +157,14 @@ export async function evaluateBazaarDeclaration(payment: NormalizedPayment, logg
     return reject('could not extract discovery info');
   }
 
+  // The screen above saw `resource.url`, but what gets stored is the SDK's canonical URL:
+  // origin + the declaration's `routeTemplate`, which the SDK does not length-bound. Screen
+  // the derived value too, so the catalog never holds a URL the screen has not seen.
+  const derived = screenResourceUrl(resource.resourceUrl, DISCOVERY_ALLOW_PRIVATE_RESOURCE_URLS);
+  if (!derived.ok) {
+    return reject(`catalogued url (origin + routeTemplate) refused: ${derived.reason}`);
+  }
+
   logger.info('Bazaar declaration accepted', {
     resource: resource.resourceUrl,
     type: resource.discoveryInfo.input.type,

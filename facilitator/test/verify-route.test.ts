@@ -11,7 +11,9 @@ vi.mock('../src/clients.js', () => ({
   USDC_ABI: [],
   splitEcdsaSignature: () => null,
 }));
-vi.mock('../src/db.js', () => ({ isDatabaseConfigured: () => false, pool: {} }));
+// Controllable per test: /supported only advertises bazaar when there is an index to write to
+const database = { configured: false };
+vi.mock('../src/db.js', () => ({ isDatabaseConfigured: () => database.configured, pool: {} }));
 vi.mock('../src/merchantStore.js', () => ({ getAllMerchants: async () => [], getMerchantByAddress: async () => null }));
 // Controllable per test: /verify only evaluates declarations once the payment verifies
 const verifyResult: { isValid: boolean; invalidReason?: string; payer: string } = { isValid: true, payer: PAYER };
@@ -38,6 +40,7 @@ afterAll(async () => {
 });
 
 beforeEach(() => {
+  database.configured = false;
   verifyResult.isValid = true;
   delete verifyResult.invalidReason;
 });
@@ -52,9 +55,15 @@ async function verify(body: unknown) {
 }
 
 describe('GET /supported', () => {
-  it('advertises the bazaar extension', async () => {
+  it('advertises the bazaar extension when a database backs the index', async () => {
+    database.configured = true;
     const supported = await (await fetch(`${base}/supported`)).json();
     expect(supported.extensions).toEqual(['bazaar']);
+  });
+
+  it('does not advertise bazaar without a database, since settle could only reject the declaration', async () => {
+    const supported = await (await fetch(`${base}/supported`)).json();
+    expect(supported.extensions).toEqual([]);
   });
 });
 

@@ -56,6 +56,8 @@ Returns the supported payment kinds and the facilitator signer, which is also th
 }
 ```
 
+`extensions` lists `bazaar` only when `DATABASE_URL` is set. Without a database there is no catalog to index into, so the facilitator does not advertise the extension and `extensions` is `[]`.
+
 ### `GET /discovery/resources`
 Bazaar catalog of resources that have settled through this facilitator with a valid `bazaar` declaration. Public, no auth. Same shape as the reference facilitator so `withBazaar(new HTTPFacilitatorClient(...)).extensions.bazaar.listResources()` works unchanged.
 
@@ -105,7 +107,15 @@ The declaration reaching `/verify` and `/settle` is attacker-controlled on both 
 
 - **Schema validation runs in a worker thread under a hard timeout** (`DISCOVERY_SCHEMA_TIMEOUT_MS`, default 250ms). Ajv compiles a schema `pattern` to a plain `RegExp` with no linear-time guarantee, so a declaration like `{"pattern": "^(a+)+$"}` matched against `"aaaa…b"` backtracks exponentially. On the main thread that blocks the event loop for the whole process. A validation that overruns has its worker killed and the declaration is reported `processing`, not `rejected`: a slow match can mean a hostile regex or simply a busy box, and the facilitator cannot tell which, so it makes no claim about the declaration. Nothing is indexed either way.
 - **Declarations over `DISCOVERY_MAX_DECLARATION_BYTES`** (default 16KB) are refused before any schema work.
-- **Resource URLs are screened** before they enter the catalog: loopback names, IPv4 literals, decimal- and hex-encoded hosts, IPv6 literals, internal-use suffixes and bare hostnames are all refused, as are URLs carrying credentials. A catalogued URL is one that agents call unattended, so the catalog must not be able to point them at `http://169.254.169.254/` or back at a private network. Set `DISCOVERY_ALLOW_PRIVATE_RESOURCE_URLS=true` to develop against a seller on localhost.
+- **Resource URLs are screened** before they enter the catalog: loopback names, IPv4 literals, decimal- and hex-encoded hosts, IPv6 literals, internal-use suffixes and bare hostnames are all refused, as are URLs carrying credentials. A catalogued URL is one that agents call unattended, so the catalog must not be able to point them at `http://169.254.169.254/` or back at a private network. Set `DISCOVERY_ALLOW_PRIVATE_RESOURCE_URLS=true` to develop against a seller on localhost. The same screen, including its 2048-character limit, is applied again to the URL that is actually stored (origin + the declaration's `routeTemplate`).
+
+`DISCOVERY_SCHEMA_TIMEOUT_MS` (minimum 1) and `DISCOVERY_MAX_DECLARATION_BYTES` (minimum 1024) are validated at startup; the process refuses to boot on a non-numeric or too-small value.
+
+#### Known limitations
+- **A deferred declaration is never indexed.** If the schema validator is saturated or times out, the header says `processing`, the payment still settles, and the declaration is dropped: nothing persists it and nothing retries it. It is only catalogued if a later settlement carries it again.
+- **`/verify` and `/settle` share one schema validation queue.** `/verify` is unauthenticated and does not consume the nonce, so a replayed payload with a slow schema can fill the queue and push real settlements onto the deferred path above.
+
+Details in [`../docs/BAZAAR_DISCOVERY.md`](../docs/BAZAAR_DISCOVERY.md#known-limitations).
 
 ### `POST /verify`
 Verifies a payment without settling it. Read-only.
