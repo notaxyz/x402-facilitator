@@ -67,6 +67,11 @@ export function screenResourceUrl(value: unknown, allowPrivate: boolean): Resour
   // Fold IDN and unicode homoglyph forms down to ASCII before matching
   const ascii = domainToASCII(hostname);
   hostname = (ascii === '' ? hostname : ascii).toLowerCase();
+  // Drop the root label. DNS resolves `svc.internal.` and `svc.internal` to the same name,
+  // so without this the rooted form slips past the loopback set and the suffix list below.
+  // Node's URL parser normalizes IPv4 forms (`127.0.0.1.` arrives as `127.0.0.1`) but
+  // leaves named hosts as written, so only names need this.
+  hostname = hostname.replace(/\.+$/, '');
 
   if (hostname === '') {
     return { ok: false, reason: 'resource.url must have a host' };

@@ -68,7 +68,7 @@ const WORKER_STARTUP_TIMEOUT_MS = 10_000;
 let worker: Worker | null = null;
 /** Resolves once the current worker has loaded the SDK and can accept a job. */
 let workerReady: Promise<void> | null = null;
-let inFlight: { job: Job; timer: NodeJS.Timeout } | null = null;
+let inFlight: { id: number; job: Job; timer: NodeJS.Timeout } | null = null;
 const queue: Job[] = [];
 let nextId = 1;
 let pumping = false;
@@ -120,6 +120,13 @@ function spawnWorker(): Worker {
     if (message.ready) return;
     const current = inFlight;
     if (!current) return;
+    // A worker can post a result just as the timeout terminates it, and that message can
+    // land after the next job is already in flight on a fresh worker. Without this the new
+    // job would be resolved with the dead job's verdict.
+    if (message.id !== current.id) {
+      logger.warn('Discarding stale schema validation reply', { replyId: message.id, expectedId: current.id });
+      return;
+    }
     inFlight = null;
     clearTimeout(current.timer);
     current.job.resolve(message.result ?? { valid: false, errors: ['schema validation returned nothing'] });
@@ -182,8 +189,11 @@ async function pump(): Promise<void> {
     // The timer must not hold the process open either
     timer.unref?.();
 
-    inFlight = { job, timer };
-    active.postMessage({ id: nextId++, declaration: job.declaration });
+    // The id travels with the job and comes back on the reply, so a reply that outlived
+    // its job can be told apart from the answer to the job now in flight
+    const id = nextId++;
+    inFlight = { id, job, timer };
+    active.postMessage({ id, declaration: job.declaration });
   } finally {
     pumping = false;
     // A job may have queued while we were awaiting readiness
