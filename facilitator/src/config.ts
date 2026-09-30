@@ -125,5 +125,18 @@ if (GAS_FEE_USDC > MAX_GAS_FEE_USDC) {
   throw new Error(`GAS_FEE_USDC (${GAS_FEE_USDC}) exceeds MAX_GAS_FEE_USDC (${MAX_GAS_FEE_USDC})`);
 }
 
+// Bazaar discovery. The declaration in a payment payload is attacker-controlled, so the
+// JSON Schema step runs in a worker under a hard timeout and oversized declarations are
+// refused before they get there.
+export const DISCOVERY_SCHEMA_TIMEOUT_MS = parseInt(process.env.DISCOVERY_SCHEMA_TIMEOUT_MS || '250', 10);
+export const DISCOVERY_MAX_DECLARATION_BYTES = parseInt(process.env.DISCOVERY_MAX_DECLARATION_BYTES || '16384', 10);
+// Resource URLs are catalogued for agents to call, so private and loopback hosts are
+// refused. Set this for local development against a seller on localhost.
+export const DISCOVERY_ALLOW_PRIVATE_RESOURCE_URLS = process.env.DISCOVERY_ALLOW_PRIVATE_RESOURCE_URLS === 'true';
+
+if (DISCOVERY_SCHEMA_TIMEOUT_MS < 1) {
+  throw new Error(`DISCOVERY_SCHEMA_TIMEOUT_MS must be at least 1ms, got ${DISCOVERY_SCHEMA_TIMEOUT_MS}`);
+}
+
 
 export const allNetworkConfigs = networkConfigs;

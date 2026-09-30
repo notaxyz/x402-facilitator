@@ -5,7 +5,9 @@ export const FACILITATOR = '0x1a642f0E3c3aF545E7AcBD38b07251B3990914F1'; // addr
 export const PAYER = '0xe7D03950f92DbD90Ce626286DCCc8768dEE09ad1';
 export const MERCHANT = '0xa4d50e386Fa77d3EE3D4F7e8246dE21F4828eeF4';
 export const USDC_SEPOLIA = '0x75faf114eafb1BDbe2F0316DF893fd58CE46AA4d';
-export const RESOURCE_URL = 'http://localhost:3100/analyze';
+export const RESOURCE_URL = 'https://api.example.com/analyze';
+/** A loopback seller, as used in local development; refused by the resource-URL screen */
+export const LOOPBACK_RESOURCE_URL = 'http://localhost:3100/analyze';
 
 export const requirements = {
   scheme: 'exact',

@@ -16,7 +16,7 @@ CREATE TABLE IF NOT EXISTS discovery_resources (
   tool_name text NOT NULL DEFAULT '',                -- MCP tool name; empty for http. Spec keys MCP entries on (url, toolName)
   x402_version integer NOT NULL,
   accepts jsonb NOT NULL,                            -- PaymentRequirements[]: the requirement from the most recent confirmed settlement (replaced, not accumulated, so stale terms never stay discoverable)
-  metadata jsonb NOT NULL,                           -- discovery blob: extensions echo, description, mimeType, serviceName, tags, iconUrl, method, routeTemplate
+  metadata jsonb NOT NULL,                           -- discovery blob: the bazaar declaration, description, mimeType, serviceName, tags, iconUrl
   merchant_address bytea NOT NULL,                   -- owning merchant: whose API key settled the first indexed payment
   last_nonce text NOT NULL,                          -- EIP-3009 nonce of the settlement that last refreshed the entry
   settle_count integer NOT NULL DEFAULT 1,
@@ -33,6 +33,6 @@ CREATE INDEX IF NOT EXISTS discovery_resources_last_updated_idx ON discovery_res
 
 COMMENT ON TABLE discovery_resources IS 'x402 bazaar discovery catalog, populated on confirmed settlement only; first indexing merchant owns the row';
 COMMENT ON COLUMN discovery_resources.accepts IS 'PaymentRequirements from the most recent confirmed settlement (each settlement carries the one requirement the buyer chose); replaced on each update so the catalog never advertises superseded terms';
-COMMENT ON COLUMN discovery_resources.metadata IS 'Discovery metadata echoed from the paying client: extensions, description, mimeType, serviceName, tags, iconUrl, method, routeTemplate';
+COMMENT ON COLUMN discovery_resources.metadata IS 'Discovery metadata echoed from the paying client: the bazaar declaration, description (capped), mimeType (capped), serviceName, tags, iconUrl';
 COMMENT ON COLUMN discovery_resources.merchant_address IS 'Merchant whose API key settled the first indexed payment; only this merchant can update the row';
 COMMENT ON COLUMN discovery_resources.last_nonce IS 'Nonce of the confirmed payment that last upserted this row (provenance)';

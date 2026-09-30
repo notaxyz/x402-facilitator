@@ -87,8 +87,25 @@ A resource is indexed only when `/settle` confirms the payer's transfer onchain;
 
 The catalog records that a declaration accompanied a confirmed payment. It does not verify that the declaring party controls the URL; see `../docs/BAZAAR_DISCOVERY.md`.
 
+**This endpoint needs migration 006.** `migrations/` is mounted into `docker-entrypoint-initdb.d`, which Postgres runs only when it initializes an empty data directory, so an existing database will not pick it up on deploy. Apply it once:
+
+```bash
+pnpm migrate migrations/006_discovery_resources.sql
+```
+
+The migration is idempotent, so re-running it is harmless. Until it is applied, `/settle` still settles payments normally (indexing failures never fail a payment) and `GET /discovery/resources` returns 503.
+
 #### `EXTENSION-RESPONSES` header
 When a request carries a `bazaar` declaration, `/verify` and `/settle` add the facilitator-to-server sidechannel header defined in spec section 7.2.1: base64 JSON keyed by extension name. For `bazaar` it holds `status` (`success` once indexed, `processing` while the payment is unconfirmed or indexing is deferred, `rejected` when the declaration was dropped or the key belongs to another merchant) and `rejectedReason` on rejection. A rejected declaration never fails the payment. The header is absent when no declaration was sent, and when a valid declaration rode on a payment that failed for unrelated reasons (nothing to say about the declaration).
+
+On `/verify` the declaration is evaluated only once the payment itself verifies. Validating a declaration means compiling and running a JSON Schema the caller supplied, and `/verify` is unauthenticated, so an unsigned payload gets no header and buys no schema work.
+
+#### Declaration hardening
+The declaration reaching `/verify` and `/settle` is attacker-controlled on both halves: the client supplies `schema` and the `info` it is checked against. Three things bound what that can cost:
+
+- **Schema validation runs in a worker thread under a hard timeout** (`DISCOVERY_SCHEMA_TIMEOUT_MS`, default 250ms). Ajv compiles a schema `pattern` to a plain `RegExp` with no linear-time guarantee, so a declaration like `{"pattern": "^(a+)+$"}` matched against `"aaaa…b"` backtracks exponentially. On the main thread that blocks the event loop for the whole process. A validation that overruns has its worker killed and the declaration is reported `processing`, not `rejected`: a slow match can mean a hostile regex or simply a busy box, and the facilitator cannot tell which, so it makes no claim about the declaration. Nothing is indexed either way.
+- **Declarations over `DISCOVERY_MAX_DECLARATION_BYTES`** (default 16KB) are refused before any schema work.
+- **Resource URLs are screened** before they enter the catalog: loopback names, IPv4 literals, decimal- and hex-encoded hosts, IPv6 literals, internal-use suffixes and bare hostnames are all refused, as are URLs carrying credentials. A catalogued URL is one that agents call unattended, so the catalog must not be able to point them at `http://169.254.169.254/` or back at a private network. Set `DISCOVERY_ALLOW_PRIVATE_RESOURCE_URLS=true` to develop against a seller on localhost.
 
 ### `POST /verify`
 Verifies a payment without settling it. Read-only.
@@ -297,6 +314,14 @@ PORT=3002
 # Optional: Max settlement amount in smallest unit (default: 1000 USDC)
 MAX_SETTLEMENT_AMOUNT=1000000000
 
+# Optional: Bazaar discovery hardening
+# Hard timeout for the worker that validates a declaration's JSON Schema (default: 250)
+DISCOVERY_SCHEMA_TIMEOUT_MS=250
+# Largest bazaar declaration accepted, in bytes (default: 16384)
+DISCOVERY_MAX_DECLARATION_BYTES=16384
+# Allow loopback / private resource URLs into the catalog. Local development only (default: false)
+DISCOVERY_ALLOW_PRIVATE_RESOURCE_URLS=false
+
 # Optional: How long to wait for a settlement receipt before returning settlement_pending (default: 180000)
 SETTLEMENT_CONFIRMATION_TIMEOUT_MS=180000
 ```
@@ -360,6 +385,8 @@ facilitator/
 │   ├── config.ts        # Network and environment configuration
 │   ├── types.ts         # Types (wire types re-exported from @x402/core)
 │   ├── bazaar.ts        # Bazaar extension: declaration validation, indexing, EXTENSION-RESPONSES
+│   ├── schemaGuard.ts   # Runs declaration JSON Schema validation in a worker under a timeout
+│   ├── resourceUrl.ts   # SSRF screening for declared resource URLs
 │   ├── discoveryStore.ts # discovery_resources table access for GET /discovery/resources
 │   ├── recovery.ts      # Retries incomplete merchant forwards
 │   ├── logging.ts       # Structured logging utilities

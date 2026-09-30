@@ -1,15 +1,16 @@
 import {
   BAZAAR,
   extractDiscoveryInfo,
-  validateDiscoveryExtension,
   validateDiscoveryExtensionSpec,
   type DiscoveredResource,
-  type DiscoveryExtension,
 } from '@x402/extensions/bazaar';
 import type { Address } from 'viem';
 import type { Response } from 'express';
 import type { NormalizedPayment } from './types.js';
 import { upsertDiscoveryResource, type DiscoveryMetadata, type UpsertOutcome } from './discoveryStore.js';
+import { validateDeclarationSchema } from './schemaGuard.js';
+import { screenResourceUrl } from './resourceUrl.js';
+import { DISCOVERY_ALLOW_PRIVATE_RESOURCE_URLS, DISCOVERY_MAX_DECLARATION_BYTES } from './config.js';
 import type { Logger } from './logging.js';
 
 /**
@@ -37,26 +38,28 @@ export interface BazaarExtensionResponse {
 export type BazaarEvaluation =
   | { declared: false }
   | { declared: true; valid: true; resource: DiscoveredResource }
-  | { declared: true; valid: false; rejectedReason: string };
+  | { declared: true; valid: false; rejectedReason: string }
+  /** No verdict was reached (validator saturated); report `processing`, never `rejected` */
+  | { declared: true; valid: false; deferred: true };
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
-function isAbsoluteHttpUrl(value: string): boolean {
-  try {
-    const url = new URL(value);
-    return url.protocol === 'http:' || url.protocol === 'https:';
-  } catch {
-    return false;
-  }
+/** Longest `description` / `mimeType` we persist and republish on the public catalog. */
+const MAX_DESCRIPTION_LENGTH = 1024;
+const MAX_MIME_TYPE_LENGTH = 128;
+
+function cap(value: string | undefined, limit: number): string | undefined {
+  if (value === undefined) return undefined;
+  return value.length > limit ? value.slice(0, limit) : value;
 }
 
 /**
  * Validate the bazaar declaration echoed in a payment payload, without side effects.
  * Returns `declared: false` when the payload carries no bazaar extension.
  */
-export function evaluateBazaarDeclaration(payment: NormalizedPayment, logger: Logger): BazaarEvaluation {
+export async function evaluateBazaarDeclaration(payment: NormalizedPayment, logger: Logger): Promise<BazaarEvaluation> {
   const declaration = payment.extensions?.[BAZAAR_KEY];
   if (declaration === undefined) {
     return { declared: false };
@@ -80,6 +83,18 @@ export function evaluateBazaarDeclaration(payment: NormalizedPayment, logger: Lo
     return reject('extensions.bazaar.schema is required');
   }
 
+  // Cheap size bound before any schema work. The body limit alone is 100kb, which is far
+  // more schema than a real declaration needs and far more than we want to hand to Ajv.
+  let declarationBytes: number;
+  try {
+    declarationBytes = Buffer.byteLength(JSON.stringify(declaration), 'utf8');
+  } catch {
+    return reject('extensions.bazaar must be JSON-serializable');
+  }
+  if (declarationBytes > DISCOVERY_MAX_DECLARATION_BYTES) {
+    return reject(`extensions.bazaar must be at most ${DISCOVERY_MAX_DECLARATION_BYTES} bytes, got ${declarationBytes}`);
+  }
+
   // Protocol invariants: input.type, method / bodyType, MCP toolName + inputSchema
   const spec = validateDiscoveryExtensionSpec(declaration);
   if (!spec.valid) {
@@ -96,15 +111,30 @@ export function evaluateBazaarDeclaration(payment: NormalizedPayment, logger: Lo
     return reject('info.output.type is required when output is present');
   }
 
-  // `info` must satisfy the declaration's own schema; external $ref/$id are refused inside
-  const schemaResult = validateDiscoveryExtension(declaration as unknown as DiscoveryExtension);
-  if (!schemaResult.valid) {
-    return reject(`info failed schema validation: ${schemaResult.errors?.join('; ')}`);
+  // The catalogued URL is what agents will call, so loopback and IP-literal hosts are out
+  const screened = screenResourceUrl(payment.resource?.url, DISCOVERY_ALLOW_PRIVATE_RESOURCE_URLS);
+  if (!screened.ok) {
+    return reject(screened.reason);
   }
 
-  const url = payment.resource?.url;
-  if (typeof url !== 'string' || !isAbsoluteHttpUrl(url)) {
-    return reject('resource.url must be an absolute http(s) URL');
+  // `info` must satisfy the declaration's own schema; external $ref/$id are refused inside.
+  // Both schema and info are attacker-controlled and Ajv compiles `pattern` to a bare
+  // RegExp, so this runs in a worker under a hard timeout (see schemaGuard.ts).
+  const schemaResult = await validateDeclarationSchema(declaration);
+  if (!schemaResult.valid) {
+    // A timeout and a saturated validator are both "no verdict reached", not findings about
+    // the declaration: a slow match can equally mean a hostile regex or a starved CPU, and
+    // we cannot tell which. Reporting `processing` costs nothing (the row is not indexed
+    // and the payment is untouched) and avoids condemning an honest seller under load.
+    if ('unavailable' in schemaResult) {
+      logger.warn('Bazaar declaration deferred: schema validator unavailable');
+      return { declared: true, valid: false, deferred: true };
+    }
+    if ('timedOut' in schemaResult) {
+      logger.warn('Bazaar declaration deferred: schema validation timed out', { errors: schemaResult.errors });
+      return { declared: true, valid: false, deferred: true };
+    }
+    return reject(`info failed schema validation: ${schemaResult.errors.join('; ')}`);
   }
 
   // `accepts` is catalogued from the advertised requirements; make sure they are well formed
@@ -149,15 +179,24 @@ export async function indexBazaarResource(
   logger: Logger
 ): Promise<UpsertOutcome> {
   const type = resource.discoveryInfo.input.type;
+
+  // The SDK sanitizes serviceName, tags and iconUrl but passes description and mimeType
+  // through untouched, and every field here is republished on a public endpoint, so bound
+  // the two it leaves alone.
+  const description = cap(resource.description, MAX_DESCRIPTION_LENGTH);
+  const mimeType = cap(resource.mimeType, MAX_MIME_TYPE_LENGTH);
+
+  // `resource.extensions` is the buyer's whole `paymentPayload.extensions` map. Republish
+  // only the declaration this catalog is about, not every other extension they attached.
+  const bazaarExtension = isPlainObject(resource.extensions) ? resource.extensions[BAZAAR_KEY] : undefined;
+
   const metadata: DiscoveryMetadata = {
-    ...(resource.description !== undefined && { description: resource.description }),
-    ...(resource.mimeType !== undefined && { mimeType: resource.mimeType }),
+    ...(description !== undefined && { description }),
+    ...(mimeType !== undefined && { mimeType }),
     ...(resource.serviceName !== undefined && { serviceName: resource.serviceName }),
     ...(resource.tags !== undefined && { tags: resource.tags }),
     ...(resource.iconUrl !== undefined && { iconUrl: resource.iconUrl }),
-    ...('method' in resource && resource.method !== undefined && { method: resource.method }),
-    ...('routeTemplate' in resource && resource.routeTemplate !== undefined && { routeTemplate: resource.routeTemplate }),
-    ...(resource.extensions !== undefined && { extensions: resource.extensions }),
+    ...(bazaarExtension !== undefined && { extensions: { [BAZAAR_KEY]: bazaarExtension } }),
   };
 
   const outcome = await upsertDiscoveryResource({

@@ -12,9 +12,7 @@ export interface DiscoveryMetadata {
   serviceName?: string;
   tags?: string[];
   iconUrl?: string;
-  method?: string;
-  routeTemplate?: string;
-  /** Extension payloads echoed by the paying client (`paymentPayload.extensions`) */
+  /** The `bazaar` declaration only, not the buyer's whole `paymentPayload.extensions` map */
   extensions?: Record<string, unknown>;
 }
 

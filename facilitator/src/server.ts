@@ -27,6 +27,19 @@ import {
 import { listDiscoveryResources, type DiscoveryResourceType } from './discoveryStore.js';
 import * as Errors from './errors.js';
 import type { SupportedKind, SupportedResponse, RequirementsRequest, PaymentRequired } from './types.js';
+import type { BazaarEvaluation } from './bazaar.js';
+
+/**
+ * Wire status for a declaration that has not been indexed yet. A declaration we reached no
+ * verdict on reports `processing`, never `rejected`: saturation is our problem, not a
+ * finding about the declaration.
+ */
+function bazaarStatusFor(evaluation: BazaarEvaluation): BazaarExtensionResponse | undefined {
+  if (!evaluation.declared) return undefined;
+  if (evaluation.valid) return { status: 'processing' };
+  if ('deferred' in evaluation) return { status: 'processing' };
+  return { status: 'rejected', rejectedReason: evaluation.rejectedReason };
+}
 
 const app: Express = express();
 
@@ -237,17 +250,20 @@ app.post('/verify', async (req: Request, res: Response) => {
 
   const nonceLogger = logger.child({ nonce: parsed.payment.authorization.nonce });
 
-  // Discovery is read-only here: a valid declaration is reported as processing until a settle confirms it
-  const bazaar = evaluateBazaarDeclaration(parsed.payment, nonceLogger);
-  if (bazaar.declared) {
-    setBazaarExtensionResponse(
-      res,
-      bazaar.valid ? { status: 'processing' } : { status: 'rejected', rejectedReason: bazaar.rejectedReason }
-    );
-  }
-
   try {
     const { response } = await verifyPayment(parsed.payment, nonceLogger);
+
+    // Evaluating a declaration costs real CPU (JSON Schema compile and match), and this
+    // route is unauthenticated, so it happens only once the payment itself checks out.
+    // An unsigned payload therefore buys no schema work at all. Discovery is read-only
+    // here: a valid declaration is reported as processing until a settle confirms it.
+    if (response.isValid) {
+      const bazaar = await evaluateBazaarDeclaration(parsed.payment, nonceLogger);
+      if (bazaar.declared) {
+        setBazaarExtensionResponse(res, bazaarStatusFor(bazaar));
+      }
+    }
+
     res.json(response);
   } catch (error: any) {
     logger.error('Verify endpoint error', { error: error.message });
@@ -279,10 +295,10 @@ app.post('/settle', settleLimiter, authenticateMerchant, async (req: Request, re
   }
 
   const nonceLogger = logger.child({ nonce: parsed.payment.authorization.nonce, merchant: merchantAddress });
-  const bazaar = evaluateBazaarDeclaration(parsed.payment, nonceLogger);
+  const bazaar = await evaluateBazaarDeclaration(parsed.payment, nonceLogger);
   let bazaarResponse: BazaarExtensionResponse | undefined;
   if (bazaar.declared && !bazaar.valid) {
-    bazaarResponse = { status: 'rejected', rejectedReason: bazaar.rejectedReason };
+    bazaarResponse = bazaarStatusFor(bazaar);
   }
 
   try {
@@ -330,6 +346,8 @@ app.post('/settle', settleLimiter, authenticateMerchant, async (req: Request, re
 
 const DISCOVERY_DEFAULT_LIMIT = 20;
 const DISCOVERY_MAX_LIMIT = 100;
+// Postgres OFFSET is a bigint; anything larger errors out of the driver as a 500
+const DISCOVERY_MAX_OFFSET = 1_000_000;
 
 function parseNonNegativeInt(value: unknown, fallback: number): number | null {
   if (value === undefined) return fallback;
@@ -355,8 +373,11 @@ app.get('/discovery/resources', async (req: Request, res: Response) => {
   if (limit === null || limit < 1 || limit > DISCOVERY_MAX_LIMIT) {
     return res.status(400).json({ error: 'Invalid limit', message: `limit must be an integer between 1 and ${DISCOVERY_MAX_LIMIT}` });
   }
-  if (offset === null) {
-    return res.status(400).json({ error: 'Invalid offset', message: 'offset must be a non-negative integer' });
+  if (offset === null || offset > DISCOVERY_MAX_OFFSET) {
+    return res.status(400).json({
+      error: 'Invalid offset',
+      message: `offset must be an integer between 0 and ${DISCOVERY_MAX_OFFSET}`,
+    });
   }
 
   const stringFilter = (value: unknown): string | undefined => (typeof value === 'string' && value.length > 0 ? value : undefined);
@@ -378,6 +399,14 @@ app.get('/discovery/resources', async (req: Request, res: Response) => {
       pagination: { limit, offset, total },
     });
   } catch (error: any) {
+    // 42P01 = undefined_table: migration 006 has not been applied to this database
+    if (error.code === '42P01') {
+      logger.error('Discovery table missing; apply migrations/006_discovery_resources.sql');
+      return res.status(503).json({
+        error: 'Discovery unavailable',
+        message: 'Discovery index is not initialized',
+      });
+    }
     logger.error('Discovery listing error', { error: error.message });
     res.status(500).json({ error: 'Internal server error' });
   }

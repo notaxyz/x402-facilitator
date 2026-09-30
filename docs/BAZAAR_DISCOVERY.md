@@ -130,6 +130,47 @@ sequenceDiagram
    then upserts `discovery_resources`. The header reports `success`. A declaration attached to a payment that never
    lands is never indexed.
 
+## Hardening the declaration path
+
+Everything in `extensions.bazaar` is written by the paying client, and `/verify` is
+unauthenticated. Three limits keep that from being a free lever on the facilitator:
+
+**The JSON Schema step runs in a worker under a hard timeout** (`src/schemaGuard.ts`).
+`validateDiscoveryExtension` compiles the declaration's own `schema` with Ajv and runs it
+against the declaration's own `info`. Ajv turns a `pattern` into a plain `RegExp`, which
+carries no linear-time guarantee and no timeout, so `{"pattern": "^(a+)+$"}` matched
+against `"aaaa…b"` costs time exponential in the length of the data. Node is
+single-threaded: on the main thread that is not a slow request, it is the whole process
+frozen, and the rate limiter cannot answer either. The validation therefore happens on a
+worker thread that can be killed, and overrunning `DISCOVERY_SCHEMA_TIMEOUT_MS` (250ms by
+default) kills it. One long-lived worker serves every request, since a worker busy
+backtracking cannot serve anything else anyway.
+
+A timeout and a saturated queue both report `processing`, never `rejected`: no verdict was
+reached, and a slow match can equally mean a hostile regex or a starved CPU. Claiming the
+declaration is bad would condemn honest sellers whenever the box is busy, and it buys
+nothing — the row is not indexed either way and the payment is untouched. Worker startup
+(~100ms to spawn the thread and load the SDK) is deliberately not charged against the
+validation budget, for the same reason.
+
+**`/verify` evaluates nothing until the payment verifies.** Schema work costs real CPU and
+the route takes no authentication, so an unsigned payload must not be able to spend it.
+The guard above is still what bounds the cost for a caller who can produce a valid
+payment; this only removes the free path.
+
+**Resource URLs are screened** (`src/resourceUrl.ts`) against the same classes of host the
+SDK already refuses for `iconUrl` — loopback, IPv4 literals, decimal- and hex-encoded
+hosts — plus IPv6 literals, internal-use suffixes, bare hostnames and embedded
+credentials. The resource URL is the field agents actually call, so it gets at least what
+the icon gets. `DISCOVERY_ALLOW_PRIVATE_RESOURCE_URLS=true` relaxes the host rules (not
+the scheme rules) for local development against a seller on localhost.
+
+Two smaller bounds: a declaration over `DISCOVERY_MAX_DECLARATION_BYTES` (16KB) is refused
+before any schema work, and `description` and `mimeType` are truncated before they are
+stored, since the SDK sanitizes `serviceName`, `tags` and `iconUrl` but passes those two
+through untouched. Only the `bazaar` key of the buyer's `extensions` map is republished,
+not every other extension they happened to attach.
+
 ## What the catalog does and does not attest
 
 A catalog row records that **a declaration accompanied a payment that confirmed onchain to the facilitator, settled
@@ -157,6 +198,8 @@ Two rules limit the damage:
 | Concern | File |
 |---|---|
 | Declaration validation, indexing, `EXTENSION-RESPONSES` | `facilitator/src/bazaar.ts` |
+| Worker-isolated, timed-out JSON Schema validation | `facilitator/src/schemaGuard.ts` |
+| Resource URL screening (SSRF) | `facilitator/src/resourceUrl.ts` |
 | Catalog table access | `facilitator/src/discoveryStore.ts` |
 | Table definition | `facilitator/migrations/006_discovery_resources.sql` |
 | Post-confirmation hook | `facilitator/src/settle.ts` (`SettleHooks.onIncomingConfirmed`) |
