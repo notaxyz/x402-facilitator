@@ -1,0 +1,41 @@
+name: facilitator
+
+on:
+  push:
+    branches: [main, dev]
+    paths: ['facilitator/**', '.github/workflows/ci.yml']
+  pull_request:
+    paths: ['facilitator/**', '.github/workflows/ci.yml']
+
+jobs:
+  check-and-test:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: facilitator
+    services:
+      # The discovery ownership gate lives in an ON CONFLICT ... WHERE clause, which only
+      # a real Postgres can exercise; without this the store's tests skip.
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: facilitator_test
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: corepack enable
+      # pnpm-lock.yaml is gitignored in this repository, so the lockfile cannot be frozen
+      - run: corepack pnpm install --no-frozen-lockfile
+      - run: corepack pnpm check
+      - run: corepack pnpm test
+        env:
+          TEST_DATABASE_URL: postgres://postgres:postgres@localhost:5432/facilitator_test
