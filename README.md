@@ -1,5 +1,7 @@
 # X402 Facilitator for Arbitrum
 
+An x402 payment facilitator service for Arbitrum with multi-merchant support, automatic fee collection, persistent nonce storage, and failure recovery.
+
 Forked from [hummusonrails/x402-facilitator](https://github.com/hummusonrails/x402-facilitator).
 The base facilitator — verify, settle, recovery, merchant registry, fee
 collection — is upstream's work. This fork adds x402 Bazaar discovery.
@@ -13,8 +15,6 @@ collection — is upstream's work. This fork adds x402 Bazaar discovery.
 - **Docs**: [`docs/BAZAAR_DISCOVERY.md`](docs/BAZAAR_DISCOVERY.md)
 
 **Scope of the ReDoS hardening.** The vulnerable path is the Bazaar declaration validation added in this fork; nothing inherited from upstream is affected. The root cause is `validateDiscoveryExtension` in `@x402/extensions/bazaar`, which compiles a declaration's own JSON Schema with Ajv and runs it against caller-supplied data with no timeout, so a crafted pattern can pin the event loop. Any facilitator adopting Bazaar discovery with that SDK inherits the issue; the worker guard above is this fork's mitigation.
-
-An x402 payment facilitator service for Arbitrum with multi-merchant support, automatic fee collection, persistent nonce storage, and failure recovery.
 
 ## Overview
 
