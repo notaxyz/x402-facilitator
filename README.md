@@ -2,6 +2,20 @@
 
 An x402 payment facilitator service for Arbitrum with multi-merchant support, automatic fee collection, persistent nonce storage, and failure recovery.
 
+Forked from [hummusonrails/x402-facilitator](https://github.com/hummusonrails/x402-facilitator).
+The base facilitator — verify, settle, recovery, merchant registry, fee
+collection — is upstream's work. This fork adds x402 Bazaar discovery.
+
+## What this fork adds
+
+- **Bazaar discovery extension** (`bazaar.ts`, `discoveryStore.ts`): validates declarations echoed in `paymentPayload.extensions.bazaar`, indexes them only after a confirmed settle (with a per-resource ownership gate), and serves them at `GET /discovery/resources`
+- **Resource URL screening** (`resourceUrl.ts`): refuses loopback, IP-literal, and internal hosts unless `DISCOVERY_ALLOW_PRIVATE_RESOURCE_URLS=true`
+- **Schema-validation worker guard** (`schemaGuard.ts`): runs declaration schema validation in a worker thread under a hard timeout (`DISCOVERY_SCHEMA_TIMEOUT_MS`), with a size cap before it (`DISCOVERY_MAX_DECLARATION_BYTES`)
+- **Migration and tooling**: `migrations/006_discovery_resources.sql`, a `pnpm migrate` script for existing databases, a Vitest suite, and a GitHub Actions CI workflow running typecheck and tests against Postgres
+- **Docs**: [`docs/BAZAAR_DISCOVERY.md`](docs/BAZAAR_DISCOVERY.md)
+
+**Scope of the ReDoS hardening.** The vulnerable path is the Bazaar declaration validation added in this fork; nothing inherited from upstream is affected. The root cause is `validateDiscoveryExtension` in `@x402/extensions/bazaar`, which compiles a declaration's own JSON Schema with Ajv and runs it against caller-supplied data with no timeout, so a crafted pattern can pin the event loop. Any facilitator adopting Bazaar discovery with that SDK inherits the issue; the worker guard above is this fork's mitigation.
+
 ## Overview
 
 This facilitator enables merchants to accept USDC payments on Arbitrum using the [x402 v2 protocol](https://github.com/x402-foundation/x402) with EIP-3009 `transferWithAuthorization`. It implements the standard facilitator API (`/verify`, `/settle`, `/supported`), so resource servers built with the official `@x402/*` SDKs can point at it directly. The service handles payment verification, onchain settlement, fee collection, and automatic recovery of failed transactions.
